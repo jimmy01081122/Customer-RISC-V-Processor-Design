@@ -1,8 +1,63 @@
+////////////////////////////////////////////////////////////////////////////////
+//
+// File: core.v
+// Module: core
+//
+// Description:
+//   Top-level RISC-V processor core implementing a non-pipelined 5-stage FSM.
+//   Each cycle, the processor transitions through one pipeline stage, enabling
+//   simple sequential instruction execution. The design prioritizes clarity for
+//   learning, with extensive comments explaining the execution flow.
+//
+// Architecture: 5-Stage FSM (Non-Pipelined)
+//   1. FETCH  : Fetch instruction from memory at current PC, capture on next clock
+//   2. DECODE : Decode instruction fields, read register files, validate format
+//   3. EXEC   : Execute ALU/FPU operations, compute branch targets, calculate addresses
+//   4. MEM    : Access data memory for loads/stores (with address validation)
+//   5. WB     : Write results back to register files, update PC, emit status pulse
+//   6. HALT   : Hold state after EOF or fatal exceptions
+//
+// Memory Map:
+//   Instruction Memory: 0x0000_0000 - 0x0000_0FFF (4 KB, addresses 0-4095)
+//   Data Memory:        0x0000_1000 - 0x0000_1FFF (4 KB, addresses 4096-8191)
+//   Unmapped accesses trigger INVALID status and halt processor
+//
+// Supported Instructions (16 total):
+//   Integer: ADD/SUB, ADDI, SLT, SRL, LW, SW, BEQ, BLT, JALR, AUIPC
+//   FP: FSUB, FMUL, FCVT.W.S, FCLASS, FLW, FSW
+//   Control: EOF (termination marker)
+//
+// Features:
+//   - 32×32-bit integer register file (x0-x31)
+//   - 32×32-bit IEEE 754 FP register file (f0-f31)
+//   - 32-bit integer ALU with overflow detection
+//   - IEEE 754 single-precision FPU with four operations
+//   - Synchronous write ports, combinational register reads
+//   - Address-based memory access validation
+//   - Status pulse signaling (one cycle high when instruction completes)
+//
+// IO Interface:
+//   Inputs:
+//     i_clk            : System clock (positive edge triggers pipeline advance)
+//     i_rst_n          : Active-low asynchronous reset (initializes state/registers)
+//     i_rdata[31:0]    : Read data from unified memory (instruction/data)
+//   Outputs:
+//     o_addr[31:0]     : Memory address for fetch/load/store
+//     o_wdata[31:0]    : Write data for stores
+//     o_we             : Write enable (high for store operations)
+//     o_status[2:0]    : Instruction type (R/I/S/B/U/INVALID/EOF) on completion
+//     o_status_valid   : Pulse (1 cycle) when instruction completes
+//     c_state[4:0]     : Current pipeline stage (for debugging)
+//     Testing ports    : rs1/rs2/rd addresses and values
+//
+// Author: [Original Designer]
+// Date: 2024
+// Version: 1.0
+//
+////////////////////////////////////////////////////////////////////////////////
+
 `include "define.v"
 
-// Top-level simple RISC-V core (non-pipelined 5-stage FSM).
-// Stages: FETCH -> DECODE -> EXECUTE -> MEM -> WRITEBACK.
-// The design favors clarity for learning, with extra comments for beginners.
 module core #(
     parameter DATA_WIDTH = 32,
     parameter ADDR_WIDTH = 32
@@ -34,16 +89,12 @@ module core #(
     output [ADDR_WIDTH-1:0] rd_data_i
 );
 
-    // ------------------------
-    // State machine definition
-    // Five visible stages + one halt for graceful stop:
-    // FETCH  -> ask memory for the instruction at PC
-    // DECODE -> parse fields and read register files
-    // EXEC   -> run ALU/FPU or branch/address math
-    // MEM    -> perform data memory read/write
-    // WB     -> write results + emit status pulse
-    // HALT   -> stay here after EOF/INVALID
-    // ------------------------
+    //==========================================================================
+    // STATE MACHINE DEFINITION & PARAMETERS
+    //==========================================================================
+    // Six states: five execution stages + one halt state
+    // Transition in response to i_clk rising edge or fatal events (INVALID/EOF)
+
     localparam ST_FETCH  = 3'd0;
     localparam ST_DECODE = 3'd1;
     localparam ST_EXEC   = 3'd2;
